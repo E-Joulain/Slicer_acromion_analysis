@@ -21,6 +21,13 @@ from slicer.parameterNodeWrapper import (
 from slicer import vtkMRMLScalarVolumeNode
 
 
+def _fmt(v, unit=""):
+    try:
+        return f"{float(v):.1f}{unit}"
+    except (TypeError, ValueError):
+        return str(v)
+
+
 #
 # Acromion_analysis
 #
@@ -122,10 +129,20 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         ScriptedLoadableModuleWidget.setup(self)
 
         nativeLabels = {
-            "P1": "TODO",
-            "P2": "TODO",
-            "P3": "TODO",
-
+            "P1": "point supérieur de la surface claviculaire SC",
+            "P2": "point inférieur de la surface claviculaire SC",
+            "P3": "Le point à mi-distance entre point 1 et point 2 (centre versant claviculaire Sc)",
+            "P4": "point supérieur de la surface claviculaire AC",
+            "P5": "point inférieur de la surface claviculaire AC",
+            "P6": "point à mi-distance entre point 4 et point 5 sur le versant claviculaire l’AC",
+            "P7": "point supérieur de la surface acromiale de l’AC ",
+            "P8": "point inflrieur de la surface acromiale de l’AC",
+            "P9": "point à mi-distance entre point 7 et point 9 sur le versant acromial de l’AC",
+            "P10": "point sur la fosse supra-épineuse à l’intersection entre la coracoïde et la fosse sus-épineuse.",
+            "P11": "Le point sur la partie médiale de la fosse sus-épineuse.",
+            "P12": "point à mi-distance entre point 10 et point 11, sur la fosse sus-épineuse",
+            "P13": "point de la coracoïde qui est le plus proche de la clavicule",
+            "P14": "point à l’intersection avec le rebord inférieur de la clavicule et la ligne jaune qui est apparue sur l'image "
         }
 
         self.fiducialLabelsByMode = {
@@ -167,13 +184,13 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         self.sideSelector.addItem("Left")
         self.selectionFormLayout.addRow("Select Side:", self.sideSelector)
 
-        # Analysis type: native (default) or Reverse prosthesis - different landmarks and different computations.
+        # Analysis type: native (default) or native prosthesis - different landmarks and different computations.
         self.xrayTypeSelector = qt.QComboBox()
         self.xrayTypeSelector.addItem("native")
-        self.xrayTypeSelector.addItem("Reverse prosthesis")
+        self.xrayTypeSelector.addItem("native prosthesis")
         self.xrayTypeSelector.setCurrentIndex(0)
         self.xrayTypeSelector.setToolTip(
-            "native: 18 landmarks. Reverse prosthesis: 20 landmarks "
+            "native: 18 landmarks. native prosthesis: 20 landmarks "
             "(humeral component, glenoid sphere base and peg points)."
         )
         self.selectionFormLayout.addRow("Analysis type:", self.xrayTypeSelector)
@@ -263,7 +280,7 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         qt.QMessageBox.information(slicer.util.mainWindow(), "DICOM Import",
                                    "The DICOM browser has been opened.\nLoad your X-ray image, then return here to place fiducials.")
 
-    # ---------- Analysis type (native / Reverse prosthesis) ----------
+    # ---------- Analysis type (native / native prosthesis) ----------
     def currentXrayType(self):
         """Return 'native'."""
         if getattr(self, "xrayTypeSelector", None) is not None:
@@ -350,7 +367,7 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         displayNode = self.markupNode.GetDisplayNode()
         displayNode.SetSelectedColor(0, 1, 0)  # green
         displayNode.SetUseGlyphScale(False)
-        displayNode.SetGlyphSize(2)
+        displayNode.SetGlyphSize(6)
 
         # Start place mode (1 point at a time)
         slicer.modules.markups.logic().StartPlaceMode(1)
@@ -358,12 +375,14 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
     def onFiducialAdded(self, caller, event):
         """Automatically label new fiducials P1..PN up to the number of labels provided."""
         n = caller.GetNumberOfControlPoints()
-        if n <= len(self.fiducialLabels):
+        nMax = len(self.fiducialLabels)
+
+        if n <= nMax:
             fidName = f"P{n}"
             caller.SetNthControlPointLabel(n - 1, fidName)
 
-            # Guide line for the scapular neck point
-            if self.currentXrayType() == "native" and n == len(self.fiducialLabels) - 1:
+            # 13 points sur 14 : fit P10-P11-P12 + perpendiculaire passant par P13
+            if self.currentXrayType() == "native" and n == nMax:
                 self.drawGuideLineForNeckPoint(caller)
 
         else:
@@ -372,51 +391,52 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
             interactionNode.SetCurrentInteractionMode(slicer.vtkMRMLInteractionNode.ViewTransform)
             slicer.util.showStatusMessage("Maximum fiducials placed — placement stopped.", 3000)
 
+
     def onExportFiducials(self, timepoint: str):
 
-        nodeName = f"Fiducials_{timepoint}"
-        node = slicer.mrmlScene.GetFirstNodeByName(nodeName)
+            nodeName = f"Fiducials_{timepoint}"
+            node = slicer.mrmlScene.GetFirstNodeByName(nodeName)
 
-        if not node:
-            slicer.util.errorDisplay(f"No fiducials placed for {timepoint}")
-            return
+            if not node:
+                slicer.util.errorDisplay(f"No fiducials placed for {timepoint}")
+                return
 
-        # --- Check metrics exist ---
-        if not hasattr(self, "currentMetrics"):
-            slicer.util.errorDisplay("Please compute metrics before exporting.")
-            return
+            # --- Check metrics exist ---
+            if not hasattr(self, "currentMetrics"):
+                slicer.util.errorDisplay("Please compute metrics before exporting.")
+                return
 
-        outputDir = qt.QFileDialog.getExistingDirectory(
-            slicer.util.mainWindow(),
-            "Select output folder"
-        )
+            outputDir = qt.QFileDialog.getExistingDirectory(
+                slicer.util.mainWindow(),
+                "Select output folder"
+            )
 
-        if not outputDir:
-            slicer.util.showStatusMessage("Export cancelled.", 2000)
-            return
+            if not outputDir:
+                slicer.util.showStatusMessage("Export cancelled.", 2000)
+                return
 
-        # --- Patient ID ---
-        patientID = self.patientIdLineEdit.text.strip()
-        if not patientID:
-            slicer.util.errorDisplay("Please enter a patient ID before exporting.")
-            return
+            # --- Patient ID ---
+            patientID = self.patientIdLineEdit.text.strip()
+            if not patientID:
+                slicer.util.errorDisplay("Please enter a patient ID before exporting.")
+                return
 
-        try:
-            self.logic.saveCombinedCSV(node, self.currentMetrics, patientID, timepoint, outputDir)
+            try:
+                self.logic.saveCombinedCSV(node, self.currentMetrics, patientID, timepoint, outputDir)
 
-            slicer.util.showStatusMessage("Fiducials + metrics saved successfully!", 5000)
+                slicer.util.showStatusMessage("Fiducials + metrics saved successfully!", 5000)
 
-        except Exception as e:
-            slicer.util.errorDisplay(f"Export failed: {e}")
+            except Exception as e:
+                slicer.util.errorDisplay(f"Export failed: {e}")
 
     def onOpenInstructionsPDF(self):
         try:
             moduleDir = os.path.dirname(__file__)
             pdfName = "Guide_Placement.pdf"
-            if self.currentXrayType() == "Reverse prosthesis":
+            if self.currentXrayType() == "native prosthesis":
                 # optional dedicated guide; falls back to the standard one if absent
-                if os.path.exists(os.path.join(moduleDir, "Resources", "Guide_Placement_Reverse.pdf")):
-                    pdfName = "Guide_Placement_Reverse.pdf"
+                if os.path.exists(os.path.join(moduleDir, "Resources", "Guide_Placement_native.pdf")):
+                    pdfName = "Guide_Placement_native.pdf"
             pdfPath = os.path.join(moduleDir, "Resources", pdfName)
 
             if not os.path.exists(pdfPath):
@@ -430,13 +450,11 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
 
     def onCalculateMetrics(self, timepoint: str):
         """Compute the metrics of the selected analysis type, show them and export.
-
-        native (18 landmarks)        -> computenativeMetrics
-        Reverse prosthesis (20 landmarks) -> computeReverseMetrics
         """
         nodeName = f"Fiducials_{timepoint}"
         scene = slicer.mrmlScene
         markupNode = scene.GetFirstNodeByName(nodeName)
+
 
         if not markupNode:
             slicer.util.errorDisplay(f"No fiducials placed for {timepoint}")
@@ -460,21 +478,20 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         for node in list(scene.GetNodesByClass("vtkMRMLMarkupsCurveNode")):
             scene.RemoveNode(node)
 
-        if self.currentXrayType() == "Reverse prosthesis":
-            metrics, text = self.computeReverseMetrics(points, patientID)
-        else:
+        if self.currentXrayType() == "native":
             metrics, text = self.computenativeMetrics(points, patientID)
-        if metrics is None:
+        else:
             return
 
         self.currentMetrics = metrics
+        slicer.util.showStatusMessage(metrics, 5000)
         self.showTextInSliceViews(text)
         self.exportAfterCompute(markupNode, metrics, patientID, timepoint)
 
     def computenativeMetrics(self, points, patientID):
         try:
             P = {f"P{i}": np.array([points[f"P{i}"]['x'], points[f"P{i}"]['y'], 0.0])
-                 for i in range(1, 24)}
+                 for i in range(1, 15)}
             m = self.logic.compute_native_metrics(P)
         except Exception as e:
             slicer.util.errorDisplay(f"Native analysis failed: {e}\n"
@@ -484,8 +501,11 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
         text = (
             f"Patient: {patientID}  (native)\n"
             f"-------------------------\n"
-            f"acromion_space : {_fmt(m['acromion_space'], '°')}\n"
-
+            f"Angle axe scapulaire / axe claviculaire : {_fmt(m['angle_scap_clav'], '°')}\n"
+            f"Longueur axe claviculaire : {_fmt(m['clavicular_axis_length'], ' px')}\n"
+            f"SC (P1-P2-P3) : {m['SC_shape']} ({_fmt(m['SC_deviation'], ' px')})\n"
+            f"AC claviculaire (P4-P5-P6) : {m['AC_clav_shape']} ({_fmt(m['AC_clav_deviation'], ' px')})\n"
+            f"AC acromiale (P7-P8-P9) : {m['AC_acro_shape']} ({_fmt(m['AC_acro_deviation'], ' px')})\n"
         )
         return m, text
 
@@ -553,12 +573,119 @@ class Acromion_analysisWidget(ScriptedLoadableModuleWidget, VTKObservationMixin)
                 displayNode.SetPropertiesLabelVisibility(visible)
                 node.Modified()
 
+    # --- add guide line ---
+    def drawGuideLineForNeckPoint(self, markupNode):
+        """Fit TLS sur P10-P11-P12, puis trace la perpendiculaire passant par P13
+        pour guider le placement de P14."""
+        pts = self.logic.get_fiducial_positions(markupNode)
+        try:
+            p10, p11, p12, p13 = (np.array([pts[k]["x"], pts[k]["y"]]) for k in ("P10", "P11", "P12", "P13"))
+        except KeyError:
+            slicer.util.errorDisplay("P10, P11, P12 and P13 are needed to draw the guide line.")
+            return
+
+        centroid, d = self.logic.fit_line_tls([p10, p11, p12])  # droite fittée (2D)
+        perp = np.array([-d[1], d[0]])  # perpendiculaire (2D)
+        z = pts["P13"]["z"]
+
+        # longueur de la ligne : diagonale du volume, sinon valeur par défaut
+        half = 500.0
+        vol = self.inputVolumeSelector.currentNode()
+        if vol:
+            b = [0.0] * 6
+            vol.GetBounds(b)
+            half = max(b[1] - b[0], b[3] - b[2], 1.0)
+
+        # droite fittée (cyan) et perpendiculaire par P13 (jaune)
+        self._addGuideLine("Guide_fit_P10_P11_P12", centroid - d * half, centroid + d * half, (0.0, 1.0, 1.0), z)
+        self._addGuideLine("Guide_perpendicular_P13", p13 - perp * half, p13 + perp * half, (1.0, 1.0, 0.0), z)
+
+        self._guide = (p13.copy(), perp.copy())
+
+        slicer.util.warningDisplay(
+            "The guide line (perpendicular to the P10-P11-P12 fit, through P13) is now displayed.\n\n"
+            "Place P14 on this line. It will be snapped onto it.\n\n"
+            "WARNING: once P14 is placed, this perpendicular cannot be redrawn unless P10, P11 and P12 "
+            "are placed again, together with ALL the other points. The whole landmark placement "
+            "would then have to be redone.",
+            windowTitle="Placement of P14")
+
+        selectionNode = slicer.app.applicationLogic().GetSelectionNode()
+        selectionNode.SetActivePlaceNodeClassName(markupNode.GetClassName())
+        selectionNode.SetActivePlaceNodeID(markupNode.GetID())
+        slicer.modules.markups.logic().StartPlaceMode(1)
+
+
+    def _resumePlacement(self, markupNode):
+            """Recréer des noeuds markups change le noeud actif de placement : on le restaure
+            pour pouvoir continuer à poser P14 dans le noeud de fiducials."""
+            appLogic = slicer.app.applicationLogic()
+            selectionNode = appLogic.GetSelectionNode()
+            selectionNode.SetReferenceActivePlaceNodeClassName("vtkMRMLMarkupsFiducialNode")
+            selectionNode.SetActivePlaceNodeID(markupNode.GetID())
+            interactionNode = appLogic.GetInteractionNode()
+            interactionNode.SetPlaceModePersistence(1)
+            interactionNode.SetCurrentInteractionMode(interactionNode.Place)
+            dn = markupNode.GetDisplayNode()
+            if dn:
+                dn.SetVisibility(True)
+            markupNode.SetLocked(False)
+
+    def _addGuideLine(self, name, p0, p1, color, z):
+        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsLineNode", name)
+        node.AddControlPoint(float(p0[0]), float(p0[1]), float(z))
+        node.AddControlPoint(float(p1[0]), float(p1[1]), float(z))
+        node.SetLocked(True)  # pas déplaçable à la souris
+        dn = node.GetDisplayNode()
+        if dn:
+            dn.SetSelectedColor(*color)
+            dn.SetColor(*color)
+            dn.SetPointLabelsVisibility(False)
+            dn.SetPropertiesLabelVisibility(False)
+        return node
+
+    def drawScapClavAngle(self, m, z=0.0):
+        """Trace les deux demi-droites et l'arc de l'angle scapulaire/claviculaire."""
+        if m.get("axes_vertex") is None:
+            slicer.util.showStatusMessage("Scapular and clavicular axes are parallel: no angle to draw.", 3000)
+            return
+
+        vertex = np.array(m["axes_vertex"], dtype=float)
+        scap_center = np.array(m["scap_center"], dtype=float)
+        scap_dir = np.array(m["scapular_axis_dir"], dtype=float)
+        clav_dir = np.array(m["clavicular_axis_dir"], dtype=float)
+        clav_mid = (np.array(m["clav_start"]) + np.array(m["clav_end"])) / 2.0
+
+        # rayon 1 : de l'intersection vers le côté où se trouvent les points scapulaires
+        u = scap_center - vertex
+        u = u / np.linalg.norm(u) if np.linalg.norm(u) > 1e-9 else scap_dir
+        # rayon 2 : direction claviculaire orientée pour que l'angle soit aigu
+        v = clav_dir if np.dot(u, clav_dir) >= 0 else -clav_dir
+
+        R = 0.3 * m["clavicular_axis_length"]  # rayon de l'arc
+        L = max(np.linalg.norm(scap_center - vertex),
+                np.linalg.norm(clav_mid - vertex), 1.5 * R)  # longueur des demi-droites
+
+        V3 = lambda p: np.array([p[0], p[1], z])
+
+        # demi-droites (axes)
+        self._addGuideLine("Angle_scap_axis", vertex, vertex + u * L, (0.0, 1.0, 1.0), z)
+        self._addGuideLine("Angle_clav_axis", vertex, vertex + v * L, (1.0, 0.5, 0.0), z)
+
+        # arc : p1 / p2 à distance R du sommet, angle = angle aigu calculé
+        self.logic.draw_arc(
+            V3(vertex), V3(vertex + u * R), V3(vertex + v * R),
+            m["angle_scap_clav"],
+            name="Angle_scap_clav", color=(1, 1, 0), thickness=1.2, num_points=30,
+        )
+
+
 #
 # Acromion_analysisLogic
 #
 
 
-class Acromion_analysisLogic(ScriptedLoadableModuleLogic):
+class acromion_space_anaLogic(ScriptedLoadableModuleLogic):
     """Logic class for data processing, angle computation, and visualization."""
 
     def __init__(self):
@@ -626,11 +753,148 @@ class Acromion_analysisLogic(ScriptedLoadableModuleLogic):
         except Exception as e:
             slicer.util.errorDisplay(f"Failed to save combined CSV: {e}")
 
+    # --- Featuring of the parameters ---
+    def fit_line_tls(self, points):
+        """Total least-squares line fit. Returns (centroid, unit_direction)."""
+        pts = np.asarray(points, dtype=float)
+        centroid = pts.mean(axis=0)
+        _, _, vt = np.linalg.svd(pts - centroid, full_matrices=False)
+        direction = vt[0]
+        return centroid, direction / np.linalg.norm(direction)
+
+    def _curvature(self, p_a, p_b, p_mid, p_ref):
+        """Détermine si la surface (p_a, p_mid, p_b) est convexe ou concave.
+
+        p_mid est le point central de la surface, p_a / p_b ses extrémités.
+        p_ref est un point situé à l'intérieur de l'os portant la surface.
+        - convexe : p_mid est du côté opposé à p_ref par rapport à la corde a-b
+                    (la surface bombe vers l'extérieur de l'os)
+        - concave : p_mid est du même côté que p_ref
+        Retourne (label, déviation_signée_mm) ; déviation > 0 => convexe.
+        """
+        a, b, m, r = (np.asarray(p, dtype=float)[:2] for p in (p_a, p_b, p_mid, p_ref))
+        chord = b - a
+        n = np.linalg.norm(chord)
+        if n < 1e-9:
+            return "indéterminé", 0.0
+
+        def side(p):  # distance signée à la corde
+            return (chord[0] * (p[1] - a[1]) - chord[1] * (p[0] - a[0])) / n
+
+        s_mid, s_ref = side(m), side(r)
+        dev = -np.sign(s_ref) * s_mid  # >0 : m est à l'opposé de ref
+        if abs(dev) < 1e-6:
+            return "plat", 0.0
+        return ("convexe" if dev > 0 else "concave"), float(dev)
+
+
     def compute_native_metrics(self, P):
+        P = {k: np.asarray(v, dtype=float) for k, v in P.items()}
+
+        def mid(a, b):
+            return (P[a] + P[b]) / 2.0
+
+        # --- Axe scapulaire (fosse sus-épineuse) ---
+        scap_center, scap_dir = self.fit_line_tls(
+            [P["P11"][:2], P["P10"][:2], P["P12"][:2]]
+        )
+
+        # --- Axe claviculaire : milieu(P1,P2) -> milieu(P8,P9) ---
+        clav_start = mid("P1", "P2")[:2]
+        clav_end = mid("P8", "P9")[:2]
+        clav_vec = clav_end - clav_start
+        clav_len = float(np.linalg.norm(clav_vec))
+        clav_dir = clav_vec / clav_len if clav_len > 1e-9 else np.array([1.0, 0.0])
+
+        # --- Angle entre axe scapulaire et axe claviculaire ---
+        cos_a = np.clip(np.dot(scap_dir, clav_dir), -1.0, 1.0)
+        angle_0_180 = float(np.degrees(np.arccos(cos_a)))
+        angle_axes = min(angle_0_180, 180.0 - angle_0_180)
+        cross = scap_dir[0] * clav_dir[1] - scap_dir[1] * clav_dir[0]
+        angle_signed = float(np.degrees(np.arctan2(cross, np.dot(scap_dir, clav_dir))))
+
+        Mx = np.array([scap_dir, -clav_dir]).T
+        if abs(np.linalg.det(Mx)) > 1e-9:
+            t = np.linalg.solve(Mx, clav_start - scap_center)
+            vertex = scap_center + t[0] * scap_dir
+
+            # demi-droite 1 : vers les points scapulaires ; demi-droite 2 : axe claviculaire, angle aigu
+            u = scap_center - vertex
+            u = u / np.linalg.norm(u) if np.linalg.norm(u) > 1e-9 else scap_dir
+            v = clav_dir if np.dot(u, clav_dir) >= 0 else -clav_dir
+
+            R = 0.3 * clav_len
+            z = 0.0
+            V3 = lambda p: np.array([p[0], p[1], z])
+
+          #  self.draw_arc(V3(vertex), V3(vertex + u * R), V3(vertex + v * R),
+          #                angle_axes, name="Angle_scap_clav",
+          #                color=(1, 1, 0), thickness=1.2, num_points=30)
+
+            # --- Concavité / convexité ---
+        # Point de référence "à l'intérieur de l'os" pour chaque surface :
+        #   SC (clavicule)        -> milieu de la surface AC claviculaire (P4,P5)
+        #   AC côté claviculaire  -> milieu de la surface SC claviculaire (P1,P2)
+        #   AC côté acromial      -> point médial de la fosse sus-épineuse (P11)
+        sc_shape, sc_dev = self._curvature(P["P1"], P["P2"], P["P3"], mid("P4", "P5"))
+        acc_shape, acc_dev = self._curvature(P["P4"], P["P5"], P["P6"], mid("P1", "P2"))
+        aca_shape, aca_dev = self._curvature(P["P7"], P["P8"], P["P9"], P["P11"])
 
         return {
             "xray_type": "Native",
-
+            "scapular_axis_dir": scap_dir.tolist(),
+            "clavicular_axis_dir": clav_dir.tolist(),
+            "clavicular_axis_length": clav_len,
+            "angle_scap_clav": angle_axes,  # angle aigu (0-90°)
+            "angle_scap_clav_180": angle_0_180,  # angle orienté (0-180°)
+            "angle_scap_clav_signed": angle_signed,
+            "SC_shape": sc_shape,
+            "SC_deviation": sc_dev,
+            "AC_clav_shape": acc_shape,
+            "AC_clav_deviation": acc_dev,
+            "AC_acro_shape": aca_shape,
+            "AC_acro_deviation": aca_dev,
         }
+
+    # --- Draw in the UI ---
+
+    def draw_arc(self, vertex, p1, p2, angle_deg, name="Arc", color=(1, 1, 0), thickness=1.2, num_points=30):
+        """
+        Draw an arc centered at `vertex`, starting at `p1` and spanning `angle_deg` toward `p2`.
+        The arc is drawn in the XY plane.
+        """
+        for node in slicer.mrmlScene.GetNodesByClass("vtkMRMLMarkupsCurveNode"):
+            if node.GetName() == name:
+                slicer.mrmlScene.RemoveNode(node)
+
+        v_start = p1 - vertex
+        angle_rad = np.radians(angle_deg)
+        points = []
+        for t in np.linspace(0, 1, num_points):
+            theta = t * angle_rad
+            rot_matrix = np.array([[np.cos(theta), -np.sin(theta)],
+                                   [np.sin(theta), np.cos(theta)]])
+            arc_point_xy = vertex[:2] + rot_matrix @ v_start[:2]
+            points.append([arc_point_xy[0], arc_point_xy[1], vertex[2]])
+
+        curveNode = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLMarkupsCurveNode", name)
+        for pt in points:
+            curveNode.AddControlPoint(pt)
+
+
+        displayNode = curveNode.GetDisplayNode()
+        if displayNode:
+            displayNode.SetSelectedColor(*color)
+
+            # Absolute line thickness (mm), independent of glyph size
+            displayNode.SetCurveLineSizeMode(displayNode.UseLineDiameter)
+            displayNode.SetLineDiameter(thickness)
+
+            # Hide point markers - safe now the line doesn't depend on glyph size
+            displayNode.SetGlyphScale(0.0)
+            displayNode.SetVisibility2D(True)
+            displayNode.SetVisibility3D(True)
+            displayNode.SetPointLabelsVisibility(False)
+            displayNode.SetPropertiesLabelVisibility(True)
 
 
